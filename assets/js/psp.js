@@ -2,7 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const API_URL =
     "https://script.google.com/macros/s/AKfycbwWNsRWtnGwvE66VpDOeishxk6jGRT6oJ6Qup73vgHI7mjbMvPPQoTAFcdeHC9CD-_RJQ/exec";
   const ENROLL_WEBHOOK =
-    "https://script.google.com/macros/s/AKfycbzYiQMAtONL8bQJoC6ID8WLXcJN__myFrlHmKqGQxTNKQ7p4vLc0C77EGSX-Lpn_RSN/exec";
+    "https://script.google.com/macros/s/AKfycbyck7pBRCWeseen7SkV4ntkgjRmZ4IepOOwWXq75pk3WbJQnFrVVTV-6FmBoyullnT4/exec";
 
   const els = {
     loginStage: document.getElementById("loginStage"),
@@ -156,46 +156,69 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (els.enrollForm) {
+    // ==========================================
+    //  UPDATED ENROLLMENT HANDLER (WITH TURNSTILE)
+    // ==========================================
     els.enrollForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      
+
+      // تعريف العناصر
       const feedbackEl = document.getElementById("formFeedback");
-      const successEl = document.getElementById("enrollSuccess");
-      const formEl = document.getElementById("enrollForm");
-      const successNameEl = document.getElementById("successName");
       const submitBtn = els.enrollSubmit;
       const phoneInput = els.enrollForm.querySelector('input[name="phone"]');
       const emailInput = els.enrollForm.querySelector('input[name="email"]');
-      const originalBtnText = submitBtn.innerHTML; 
+      const originalBtnText = submitBtn.innerHTML;
 
+      // دالة إظهار الأخطاء المحلية
       function showLocalError(msg) {
         if (feedbackEl) {
           feedbackEl.textContent = msg;
           feedbackEl.style.display = "block";
+          feedbackEl.className = "form-feedback error-msg"; // ضمان التنسيق الأحمر
           if (typeof gsap !== "undefined") {
             gsap.fromTo(feedbackEl, { y: -10, opacity: 0 }, { y: 0, opacity: 1, duration: 0.3 });
           }
+        } else {
+          alert(msg);
         }
       }
 
+      // 1. التحقق من صحة الهاتف
       if (!phoneInput.value.startsWith("+")) {
-        showLocalError("Phone number must start with country code (e.g. +1, +44).");
+        showLocalError("Phone number must start with country code (e.g. +966...).");
         return;
       }
 
+      // 2. التحقق من صحة الإيميل
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.value)) {
         showLocalError("Please enter a valid email address.");
         return;
       }
 
+      // 3. التحقق الأمني (CAPTCHA CHECK) - الجديد
+      const formData = new FormData(els.enrollForm);
+      const turnstileToken = formData.get('cf-turnstile-response');
+
+      if (!turnstileToken) {
+        showLocalError("Please complete the security check (Captcha) above the button.");
+        return;
+      }
+
+      // إخفاء الأخطاء وبدء التحميل
       if (feedbackEl) feedbackEl.style.display = "none";
       submitBtn.disabled = true;
       submitBtn.innerHTML = 'Sending... <i class="fas fa-spinner fa-spin"></i>';
 
-      const formData = new FormData(els.enrollForm);
+      // تجهيز البيانات للإرسال
+      // ملاحظة: نستخدم URLSearchParams لضمان وصول البيانات بشكل صحيح لـ Apps Script
       const data = new URLSearchParams();
       for (const pair of formData) {
         data.append(pair[0], pair[1]);
+      }
+      
+      // تأكيد وجود التوكن
+      if (!data.has('cf-turnstile-response')) {
+         data.append('cf-turnstile-response', turnstileToken);
       }
 
       try {
@@ -206,9 +229,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const result = await response.json();
 
-        if (result.result === "success") {
+        if (result.status === "success" || result.result === "success") {
+          // نجاح!
+          
+          // 1. تصفير الكاباتشا (مهم جداً للمحاولات القادمة)
+          if (typeof turnstile !== 'undefined') turnstile.reset();
+          
+          // 2. مسح البيانات القديمة
           localStorage.clear();
-          handleSuccess(result.name); 
+          
+          // 3. نقل المستخدم لواجهة النجاح
+          handleSuccess(result.name || "Partner"); 
+          
         } else {
           throw new Error(result.message || "Submission failed");
         }
@@ -216,14 +248,19 @@ document.addEventListener("DOMContentLoaded", () => {
         console.error("Submission Error:", err);
         showLocalError(
           err.message === "Failed to fetch"
-            ? "Connection error. Please checks your internet."
+            ? "Connection error. Please check your internet."
             : err.message
         );
+        
+        // إعادة الزر لحالته الطبيعية
         submitBtn.disabled = false;
         submitBtn.innerHTML = originalBtnText;
+        
+        // تصفير الكاباتشا عند الخطأ أيضاً
+        if (typeof turnstile !== 'undefined') turnstile.reset();
       }
     });
-
+    
     function showError(msg) {
       if (els.authError) {
         els.authError.textContent = msg;
